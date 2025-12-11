@@ -65,50 +65,95 @@ router.post('/', auth, async (req, res) => {
 })
 
 router.get('/', auth, async (req, res) => {
-    const { id } = req.query;
 
     try {
-        if(id){
-            const pedido = await pool.query("SELECT * FROM pedidos WHERE id = $1 AND id_usuario = $2",
-                [id, req.user.id]
-            );
-
-            if (pedido.rowCount === 0) {
-                return res.status(404).json({
-                    error: "Pedido não encontrado"
-                })
-            }
-
-            const itens = await pool.query(`
-                    SELECT p.nome, pi.quantidade, pi.valor_unitario
-                    FROM pedidos_itens pi
-                    JOIN produtos p ON p.id = pi.id_produto
-                    WHERE pi.id_pedido = $1
-                `, [id]);
-
-            return res.json({
-                pedido: pedido.rows[0],
-                itens: itens.rows
-            });
-        }
-
-        const result = await pool.query(
+        // retorna apenas pedidos do usuario logado
+        const pedidos = await pool.query(
             "SELECT * FROM pedidos WHERE id_usuario = $1 ORDER BY id DESC",
             [req.user.id]
-        )
-        
-        res.json(result.rows);
+        );
+
+        res.json(pedidos.rows);
 
     } catch (err) {
         console.log(err);
-        res.status(500).json({
-            error: "Erro ao Bucar pedidos"
-        })
+        res.status(500).json({ error: "Erro ao listar pedidos" });
     }
 });
 
-// router.put
 
+/**
+ * 📌 RETORNAR UM PEDIDO COMPLETO
+ * GET /pedidos/:id
+ */
+router.get('/:id', auth, async (req, res) => {
+    const { id } = req.params;
+
+    try {
+        // busca pedido
+        const pedido = await pool.query(
+            "SELECT * FROM pedidos WHERE id = $1 AND id_usuario = $2",
+            [id, req.user.id]
+        );
+
+        // caso não exista ou não seja do usuário
+        if (pedido.rowCount === 0) {
+            return res.status(404).json({ error: "Pedido não encontrado" });
+        }
+
+        // busca itens do pedido
+        const itens = await pool.query(`
+            SELECT 
+                p.nome,
+                pi.quantidade,
+                pi.valor_unitario,
+                (pi.quantidade * pi.valor_unitario) AS subtotal
+            FROM pedidos_itens pi
+            JOIN produtos p ON p.id = pi.id_produto
+            WHERE pi.id_pedido = $1
+        `, [id]);
+
+        res.json({
+            pedido: pedido.rows[0],
+            itens: itens.rows
+        });
+
+    } catch (err) {
+        console.log(err);
+        res.status(500).json({ error: "Erro ao buscar pedido" });
+    }
+});
+
+
+//alterar pedidos
+router.put('/:id', auth, async (req, res) => {
+    const { status, valor_total } = req.body;
+    const { id } = req.params;
+
+    try {
+        const result = await pool.query(`
+            UPDATE pedidos
+            SET status = $1,
+                valor_total = $2
+            WHERE id = $3
+                AND id_usuario = $4
+            RETURNING *
+            `, [status, valor_total, id, req.user.id]);
+
+            if(result.rowCount === 0) {
+                return res.status(404).json({ error: "Pedido não encontro"});
+            }
+
+            res.json(result.rows[0]);
+    } catch (err) {
+        console.log(err);
+        res.status(500).json({ error: "Erro ao atualizar o pedido"});
+    }
+});
+
+
+
+//alterar itens
 router.put('/:id/itens', auth, async (req, res) => {
     const { itens } = req.body;
     const pedidoId = req.params.id;
@@ -175,8 +220,33 @@ router.put('/:id/itens', auth, async (req, res) => {
         res.status(500).json({
             error: "Erro ao atualizar itens"
         })
-    }
-    
+    }    
 })
+
+router.delete('/:id', auth, async (req, res) => {
+    const { id } = req.params;
+
+    try {
+        await pool.query(
+            "DELETE FROM pedidos_itens WHERE id_pedido = $1",
+            [id]
+        );
+
+        const result = await pool.query(
+            "DELETE FROM pedidos WHERE id=$1 AND id_usuario=$2",
+            [id, req.user.id]
+        );
+
+        if (result.rowCount === 0) {
+            return res.status(404).json({ error: "Pedido não encontrado"});
+        }
+
+        res.json({ message: "Pedido removido com sucesso"});
+    
+    } catch (err) {
+        console.log(err);
+        res.status(500).json({ error: "Erro ao deletar pedido"});
+    }
+});
 
 module.exports = router;
